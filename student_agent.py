@@ -457,7 +457,7 @@ class Agent(object):
 
             temp_state = np.stack(self.frame_stack, axis=0)
             state = copy.deepcopy(temp_state)
-            determined_act = self.the_agent.get_action(state)
+            determined_act = self.the_agent.get_action(state,deterministic=True)
             self.previous_act = determined_act
             self.step = self.step + 1
         else:
