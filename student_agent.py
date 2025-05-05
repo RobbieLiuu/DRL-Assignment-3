@@ -369,6 +369,7 @@ class Agent(object):
 
 
 
+
         if self.step % 4 == 0 :
             if self.step == 0:
                 for i in range(4):
