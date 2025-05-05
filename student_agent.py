@@ -316,7 +316,7 @@ class DQNVariant:
         if 'icm_optimizer' in checkpoint:
             self.icm_optimizer.load_state_dict(checkpoint['icm_optimizer'])
 
-        print(f"Model loaded from {path}")
+      #  print(f"Model loaded from {path}")
         return self
 
 
@@ -420,7 +420,7 @@ class Agent(object):
         self.step = 0
         self.frame_stack = deque(maxlen=4)
         self.previous_act = 0
-        #self.the_agent = DQNVariant((4, 84, 84), 12).load("dqn_ep1200.pt") 
+        self.the_agent = DQNVariant((4, 84, 84), 12).load("dqn_ep1200.pt") 
 
     def act(self, observation):
 
@@ -441,6 +441,7 @@ class Agent(object):
                     [T.Resize(targetshape, antialias=True), T.Normalize(0, 255)]
                 )
         observation = transforms(observation).squeeze(0)
+
 
 
         preprocessed_frame = observation
