@@ -339,7 +339,7 @@ class Agent(object):
         self.step = 0
         self.frame_stack = deque(maxlen=4)
         self.previous_act = 0
-        self.the_agent = DQNVariant((4, 84, 84), 12).load("dqn_ep2900.pt") 
+        self.the_agent = DQNVariant((4, 84, 84), 12).load("dqn_ep1200.pt") 
 
     def act(self, observation):
 
