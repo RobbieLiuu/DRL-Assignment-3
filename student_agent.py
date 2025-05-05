@@ -382,7 +382,7 @@ class Agent(object):
         else:
             self.step = self.step + 1
             determined_act = self.previous_act
-        return 4
+        return determined_act
 
 
 
