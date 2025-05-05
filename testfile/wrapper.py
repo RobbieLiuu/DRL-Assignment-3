@@ -6,6 +6,11 @@ import numpy as np
 from pathlib import Path
 from collections import deque
 import random, datetime, os
+import gc
+
+import torch.multiprocessing as mp
+mp.set_sharing_strategy('file_system')
+
 
 # Gym is an OpenAI toolkit for RL
 import gym
@@ -17,7 +22,7 @@ from nes_py.wrappers import JoypadSpace
 
 # Super Mario environment for OpenAI Gym
 import gym_super_mario_bros
-
+from gym_super_mario_bros.actions import COMPLEX_MOVEMENT
 from tensordict import TensorDict
 from torchrl.data import TensorDictReplayBuffer, LazyMemmapStorage
 
@@ -41,17 +46,6 @@ import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 
-env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0")
-
-
-# Limit the action-space to
-#   0. walk right
-#   1. jump right
-env = JoypadSpace(env, [["right"], ["right", "A"]])
-
-env.reset()
-next_state, reward, done,  info = env.step(action=0)
-print(f"{next_state.shape},\n {reward},\n {done},\n {info}")
 
 
 
@@ -112,10 +106,6 @@ class ResizeObservation(gym.ObservationWrapper):
 
 
 # Apply Wrappers to environment
-env = SkipFrame(env, skip=4)
-env = GrayScaleObservation(env)
-env = ResizeObservation(env, shape=84)
-env = FrameStack(env, num_stack=4)
 
 
 
@@ -203,8 +193,8 @@ class ICM(nn.Module):
 
 class DQNVariant:
     def __init__(self, state_shape, action_size, gamma=0.99, lr=1e-3,
-                 buffer_size=200000, batch_size=8, tau=1e-2, update_every=10000,
-                 icm_beta=0.1, forward_loss_weight=0.8):
+                 buffer_size=200000, batch_size=32, tau=1e-2, update_every=10000,
+                 icm_beta=0.1, forward_loss_weight=0.8,epsilon=1,total_steps=0,episode=0):
         self.state_shape = state_shape  # (C, H, W)
         self.action_size = action_size
         self.gamma = gamma
@@ -214,9 +204,10 @@ class DQNVariant:
         self.update_every = update_every
         self.icm_beta = icm_beta            
         self.forward_loss_weight = forward_loss_weight 
-
+        self.epsilon = epsilon
+        self.total_steps = total_steps
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+        self.episode = episode
         c, h, w = state_shape
         self.q_net = QNet(c, action_size).to(self.device)
         self.target_net = QNet(c, action_size).to(self.device)
@@ -283,39 +274,35 @@ class DQNVariant:
                 target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
         else:
             self.target_net.load_state_dict(self.q_net.state_dict())
-
     def train(self):
-        if len(self.replay_buffer) < max(self.batch_size, 1000):
+        if len(self.replay_buffer) < self.batch_size:
             return
 
-        batch = self.replay_buffer.sample().to(self.device) 
-        states  = batch["obs"].to(self.device)  
-        actions = batch["action"].long().to(self.device)  # shape: [B, 1]
-        rewards = batch["reward"].to(self.device)
+        batch = self.replay_buffer.sample().to(self.device)    
+        states = batch["obs"].to(self.device)      
+        actions = batch["action"].long().to(self.device).view(-1)  
+        rewards = batch["reward"].to(self.device).view(-1)
         next_states = batch["next_obs"].to(self.device)
-        dones   = batch["done"].to(self.device)
+        dones = batch["done"].to(self.device).view(-1)  
 
-
-        q_values = self.q_net(states)[range(len(actions)), actions]
+        q_values = self.q_net(states)[torch.arange(len(actions)), actions]  
 
         with torch.no_grad():
-            next_actions = self.q_net(next_states).argmax(1, keepdim=True)
-            next_q_values = self.target_net(next_states).gather(1, next_actions)
-            target_q_values = rewards + torch.logical_not(dones) * self.gamma * next_q_values
+            next_actions = self.q_net(next_states).argmax(dim=1, keepdim=True)  # [B, 1]
+            next_q_values = self.target_net(next_states).gather(1, next_actions).squeeze(1)  # [B]
+            target_q_values = rewards + torch.logical_not(dones) * self.gamma * next_q_values  # [B]
 
-   
         dqn_loss = F.smooth_l1_loss(q_values, target_q_values)
 
-
         pred_action_logits, pred_phi_next, phi_next = self.icm(states, next_states, actions)
-
-        inverse_loss = F.cross_entropy(pred_action_logits, actions.view(-1))
-        forward_loss = F.smooth_l1_loss(pred_phi_next, phi_next)
+        inverse_loss = F.cross_entropy(pred_action_logits, actions) 
+        forward_loss = F.smooth_l1_loss(pred_phi_next.view(phi_next.shape), phi_next)  
 
         icm_loss = self.icm_beta * inverse_loss + self.forward_loss_weight * forward_loss
-
         total_loss = dqn_loss + icm_loss
-        total_loss = total_loss.to(self.device)
+
+      #  print("q_values shape:", q_values.shape)
+       # print("target_q_values shape:", target_q_values.shape)
 
         self.optimizer.zero_grad()
         self.icm_optimizer.zero_grad()
@@ -326,21 +313,29 @@ class DQNVariant:
         self.train_step += 1
         if self.train_step % self.update_every == 0:
             self.update(soft=False)
+
         torch.cuda.empty_cache()
 
     def save(self, path):
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        torch.save({
-            'q_net': self.q_net.state_dict(),
-            'target_net': self.target_net.state_dict(),
-            'optimizer': self.optimizer.state_dict(),
-            'train_step': self.train_step,
-            'replay_buffer': self.replay_buffer._storage.state_dict(),
+        try:
+            torch.save({
+                'q_net': self.q_net.state_dict(),
+                'target_net': self.target_net.state_dict(),
+                'optimizer': self.optimizer.state_dict(),
+                'train_step': self.train_step,
+                'epsilon': self.epsilon,           
+                'total_steps': self.total_steps, 
+                'episode': self.episode,  
+                'icm': self.icm.state_dict(),
+                'icm_optimizer': self.icm_optimizer.state_dict(),
+            }, path)
+            print(f"saved to {path}")
+        except Exception as e:
+            print(f"failed to save: {e}")
 
-            'icm': self.icm.state_dict(),
-            'icm_optimizer': self.icm_optimizer.state_dict(),
-        }, path)
-        print(f"Model and replay buffer saved to {path}")
+
+
 
     def load(self, path):
         checkpoint = torch.load(path, map_location=self.device)
@@ -348,13 +343,18 @@ class DQNVariant:
         self.target_net.load_state_dict(checkpoint['target_net'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
         self.train_step = checkpoint.get('train_step', 0)
-        if 'replay_buffer' in checkpoint:
-            self.replay_buffer._storage.load_state_dict(checkpoint['replay_buffer'])
+        self.epsilon = checkpoint.get('epsilon', 1.0)       
+        self.total_steps = checkpoint.get('total_steps', 0)      
+        self.episode = checkpoint.get('episode', 1)
+
+
         if 'icm' in checkpoint:
             self.icm.load_state_dict(checkpoint['icm'])
         if 'icm_optimizer' in checkpoint:
             self.icm_optimizer.load_state_dict(checkpoint['icm_optimizer'])
-        print(f" Model and replay buffer loaded from {path}")
+
+        print(f"Model loaded from {path}")
+
 
     def maybe_save_best(self, total_reward, best_reward, path="checkpoints/best_model.pt"):
         if total_reward > best_reward:
@@ -363,7 +363,8 @@ class DQNVariant:
             return total_reward
         return best_reward
 
-#################################################################
+
+
 
 
 import torch
@@ -374,6 +375,13 @@ import numpy as np
 if not hasattr(np, 'bool8'):
     np.bool8 = np.bool_
 
+env = gym_super_mario_bros.make('SuperMarioBros-v0')
+env = JoypadSpace(env, COMPLEX_MOVEMENT)
+
+env = SkipFrame(env, skip=0)
+env = GrayScaleObservation(env)
+env = ResizeObservation(env, shape=84)
+env = FrameStack(env, num_stack=4)
 
 
 state_size = env.observation_space.shape
@@ -388,21 +396,29 @@ epsilon_end = 0.0005
 step_count = 0
 epsilon = epsilon_start
 reward_history = []  
+start_episode = 1
 
-checkpoint_path = "checkpoints/last_model.pt"
-best_model_path = "checkpoints/best_model.pt"
+import glob
+
+checkpoint_files = sorted(
+    glob.glob("checkpoints/dqn_ep*.pt"), 
+    key=lambda x: int(x.split("_ep")[1].split(".")[0])
+)
+
+if checkpoint_files:
+    latest_checkpoint = checkpoint_files[-1] 
+    agent.load(latest_checkpoint)
+    epsilon = agent.epsilon
+    step_count = agent.total_steps
+    start_episode = agent.episode + 1 
+    print(f"Recovered from latest checkpoint: {latest_checkpoint}")
+else:
+    print("No checkpoint found, training from scratch.")
 
 
 best_reward = -float("inf")
-if os.path.exists(checkpoint_path):
-    agent.load(checkpoint_path)
-    print("recover from previous checkpoint")
 
-else:
-    print("train from scratch")
-
-
-for episode in range(num_episodes):
+for episode in range(start_episode, num_episodes):
     state = env.reset() 
     done = False
     total_reward = 0
@@ -426,11 +442,14 @@ for episode in range(num_episodes):
         state = next_state
         total_reward += reward
         step_count += 1
+        agent.total_steps = step_count
 
-    epsilon = max(epsilon_start * 10 ** (-step_count / 600000), epsilon_end)
-    if (episode + 1) % 1000 == 0:
-        best_reward = agent.maybe_save_best(total_reward, best_reward)
-        agent.save(f"checkpoints/dqn_ep{episode+1}.pt")
-
-    print(f"Episode {episode + 1}, Reward: {total_reward:.2f}, Epsilon: {epsilon:.3f}")
+    epsilon = max(epsilon * 0.99924, epsilon_end)
+    agent.epsilon = epsilon
+    agent.episode = episode
+    print(f"Episode {episode}, Reward: {total_reward:.2f}, Epsilon: {epsilon:.3f}, step_count: {step_count}, replay buffer length:{len(agent.replay_buffer)}")
     reward_history.append(total_reward)
+    if episode % 100== 0:
+
+        best_reward = agent.maybe_save_best(total_reward, best_reward)
+        agent.save(f"checkpoints/dqn_ep{episode}.pt")

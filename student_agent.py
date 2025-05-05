@@ -341,6 +341,7 @@ class Agent(object):
         self.previous_act = 0
         self.the_agent = DQNVariant((4, 84, 84), 12).load("dqn_ep1200.pt") 
 
+
     def act(self, observation):
 
        # checkpoint = torch.load("dqn_ep1200.pt", map_location="cpu")
