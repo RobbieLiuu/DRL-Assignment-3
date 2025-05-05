@@ -260,9 +260,7 @@ class ICM(nn.Module):
 
 
 class DQNVariant:
-    def __init__(self, state_shape, action_size, gamma=0.99, lr=1e-3,
-                 buffer_size=200000, batch_size=32, tau=1e-2, update_every=10000,
-                 icm_beta=0.1, forward_loss_weight=0.8,epsilon=1,total_steps=0,episode=0):
+    def __init__(self, state_shape, action_size, gamma=0.99, lr=1e-3,buffer_size=50000, batch_size=32, tau=1e-2, update_every=10000,icm_beta=0.1, forward_loss_weight=0.8,epsilon=1,total_steps=0,episode=0):
         self.state_shape = state_shape  # (C, H, W)
         self.action_size = action_size
         self.gamma = gamma
@@ -398,8 +396,6 @@ class DQNVariant:
             self.icm.load_state_dict(checkpoint['icm'])
         if 'icm_optimizer' in checkpoint:
             self.icm_optimizer.load_state_dict(checkpoint['icm_optimizer'])
-
-        print(f"Model loaded from {path}")
         return self
 
 
@@ -412,7 +408,7 @@ import numpy as np
 
 
 # Do not modify the input of the 'act' function and the '__init__' function. 
-class Agentt(object):
+class Agent(object):
     """Agent that acts randomly."""
     def __init__(self):
         self.action_space = gym.spaces.Discrete(12)
