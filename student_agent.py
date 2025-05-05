@@ -422,6 +422,9 @@ class Agent(object):
         #self.the_agent = DQNVariant((4, 84, 84), 12).load("dqn_ep1200.pt") 
 
     def act(self, observation):
+
+        checkpoint = torch.load("dqn_ep1200.pt", map_location="cpu")
+        print(checkpoint.keys())
         self.the_agent = DQNVariant((4, 84, 84), 12).load("dqn_ep1200.pt") 
         observation = np.transpose(observation, (2, 0, 1))
         observation = torch.tensor(observation.copy(), dtype=torch.float)
