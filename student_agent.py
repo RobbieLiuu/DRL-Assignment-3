@@ -27,20 +27,6 @@ from tensordict import TensorDict
 from torchrl.data import TensorDictReplayBuffer, LazyMemmapStorage
 
 
-import GPUtil
-torch.cuda.empty_cache()
-def get_gpu_with_most_memory():
-    gpus = GPUtil.getGPUs()
-    max_free_mem = -1
-    gpu_id_with_max_mem = -1
-    for gpu in gpus:
-        free_mem = gpu.memoryFree
-        if free_mem > max_free_mem:
-            max_free_mem = free_mem
-            gpu_id_with_max_mem = gpu.id
-    return gpu_id_with_max_mem, max_free_mem
-
-
 
 import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -120,69 +106,6 @@ from torchrl.data import RandomSampler
 from torchrl.data import TensorDictReplayBuffer
 from torchrl.data import LazyMemmapStorage
 
-import math
-
-
-
-
-
-
-
-class NoisyLinear(nn.Module):
-    def __init__(self, in_features, out_features, sigma_init=0.017):
-        super(NoisyLinear, self).__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-
-        self.weight_mu = nn.Parameter(torch.empty(out_features, in_features))
-        self.weight_sigma = nn.Parameter(torch.full((out_features, in_features), sigma_init))
-        self.register_buffer("weight_epsilon", torch.zeros(out_features, in_features))
-
-        self.bias_mu = nn.Parameter(torch.empty(out_features))
-        self.bias_sigma = nn.Parameter(torch.full((out_features,), sigma_init))
-        self.register_buffer("bias_epsilon", torch.zeros(out_features))
-
-        self.reset_parameters()
-        self.reset_noise()
-
-    def reset_parameters(self):
-        mu_range = 1 / math.sqrt(self.in_features)
-        self.weight_mu.data.uniform_(-mu_range, mu_range)
-        self.bias_mu.data.uniform_(-mu_range, mu_range)
-
-    def reset_noise(self):
-        epsilon_in = self._scale_noise(self.in_features)
-        epsilon_out = self._scale_noise(self.out_features)
-        self.weight_epsilon.copy_(epsilon_out.ger(epsilon_in))
-        self.bias_epsilon.copy_(epsilon_out)
-
-    def _scale_noise(self, size):
-        x = torch.randn(size)
-        return x.sign() * x.abs().sqrt()
-
-    def forward(self, x):
-        if self.training:
-            weight = self.weight_mu + self.weight_sigma * self.weight_epsilon
-            bias = self.bias_mu + self.bias_sigma * self.bias_epsilon
-        else:
-            weight = self.weight_mu
-            bias = self.bias_mu
-        return F.linear(x, weight, bias)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 class QNet(nn.Module):
     def __init__(self, input_channels, action_size):
@@ -195,20 +118,15 @@ class QNet(nn.Module):
             nn.Conv2d(64, 64, kernel_size=3, stride=1),
             nn.ReLU()
         )
-        self.flatten = nn.Flatten()
-        self.fc1 = NoisyLinear(64 * 7 * 7, 512)
-        self.relu = nn.ReLU()
-        self.fc2 = NoisyLinear(512, action_size)
+        self.fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(64 * 7 * 7, 512),
+            nn.ReLU(),
+            nn.Linear(512, action_size)
+        )
 
     def forward(self, x):
-        x = self.conv(x)
-        x = self.flatten(x)
-        x = self.relu(self.fc1(x))
-        return self.fc2(x)
-
-    def reset_noise(self):
-        self.fc1.reset_noise()
-        self.fc2.reset_noise()
+        return self.fc(self.conv(x))
 
 
 class ICM(nn.Module):
@@ -279,6 +197,7 @@ class DQNVariant:
         c, h, w = state_shape
         self.q_net = QNet(c, action_size).to(self.device)
         self.target_net = QNet(c, action_size).to(self.device)
+        self.target_net.load_state_dict(self.q_net.state_dict())
         self.target_net.eval()
 
         self.optimizer = torch.optim.Adam(self.q_net.parameters(), lr=self.lr)
@@ -294,15 +213,19 @@ class DQNVariant:
 
         self.train_step = 0
 
-    def get_action(self, state):  # NoisyNet 不用 ε-greedy 探索了
+    def get_action(self, state, epsilon=0.1, deterministic=False):
+
         if isinstance(state, (tuple, list)):
             state = state[0]
         if not isinstance(state, (np.ndarray, list)):
             state = np.array(state)
         state = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
-        with torch.no_grad():
-            q_values = self.q_net(state)
-        return q_values.argmax().item()
+        if deterministic or random.random() > epsilon:
+            with torch.no_grad():
+                q_values = self.q_net(state)
+            return q_values.argmax().item()
+        else:
+            return random.randrange(self.action_size)
         
 
     def add_transition(self, state, action, reward, next_state, done):
@@ -340,8 +263,7 @@ class DQNVariant:
     def train(self):
         if len(self.replay_buffer) < self.batch_size:
             return
-        self.q_net.reset_noise()
-        self.target_net.reset_noise()
+
         batch = self.replay_buffer.sample().to(self.device)    
         states = batch["obs"].to(self.device)      
         actions = batch["action"].long().to(self.device).view(-1)  
@@ -399,9 +321,7 @@ class DQNVariant:
         if 'icm_optimizer' in checkpoint:
             self.icm_optimizer.load_state_dict(checkpoint['icm_optimizer'])
 
-        print(f"Model loaded from {path}")
         return self
-
 
 
 import copy
@@ -419,7 +339,7 @@ class Agent(object):
         self.step = 0
         self.frame_stack = deque(maxlen=4)
         self.previous_act = 0
-        self.the_agent = DQNVariant((4, 84, 84), 12).load("dqn_latest.pt") 
+        self.the_agent = DQNVariant((4, 84, 84), 12).load("dqn_ep1200.pt") 
 
     def act(self, observation):
 
