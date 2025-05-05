@@ -324,87 +324,87 @@ import torch.nn as nn
 import numpy as np
 
 
-if not hasattr(np, 'bool8'):
-    np.bool8 = np.bool_
+# if not hasattr(np, 'bool8'):
+#     np.bool8 = np.bool_
 
-env = gym_super_mario_bros.make('SuperMarioBros-v0')
-env = JoypadSpace(env, COMPLEX_MOVEMENT)
+# env = gym_super_mario_bros.make('SuperMarioBros-v0')
+# env = JoypadSpace(env, COMPLEX_MOVEMENT)
 
-env = SkipFrame(env, skip=0)
-env = GrayScaleObservation(env)
-env = ResizeObservation(env, shape=84)
-env = FrameStack(env, num_stack=4)
-
-
-state_size = env.observation_space.shape
-action_size = env.action_space.n
-agent = DQNVariant(state_size, action_size)
+# env = SkipFrame(env, skip=0)
+# env = GrayScaleObservation(env)
+# env = ResizeObservation(env, shape=84)
+# env = FrameStack(env, num_stack=4)
 
 
-num_episodes = 10000
-epsilon_start = 1.0
-epsilon_end = 0.0005
-#epsilon_decay = 0.999
-step_count = 0
-epsilon = epsilon_start
-reward_history = []  
-start_episode = 1
-
-import glob
-
-checkpoint_files = sorted(
-    glob.glob("checkpoints/dqn_ep*.pt"), 
-    key=lambda x: int(x.split("_ep")[1].split(".")[0])
-)
-
-if checkpoint_files:
-    latest_checkpoint = checkpoint_files[-1] 
-    agent.load(latest_checkpoint)
-    epsilon = agent.epsilon
-    step_count = agent.total_steps
-    start_episode = agent.episode + 1 
-    print(f"Recovered from latest checkpoint: {latest_checkpoint}")
-else:
-    print("No checkpoint found, training from scratch.")
+# state_size = env.observation_space.shape
+# action_size = env.action_space.n
+# agent = DQNVariant(state_size, action_size)
 
 
-best_reward = -float("inf")
+# num_episodes = 10000
+# epsilon_start = 1.0
+# epsilon_end = 0.0005
+# #epsilon_decay = 0.999
+# step_count = 0
+# epsilon = epsilon_start
+# reward_history = []  
+# start_episode = 1
 
-for episode in range(start_episode, num_episodes):
-    state = env.reset() 
-    done = False
-    total_reward = 0
+# import glob
 
-    while not done:
+# checkpoint_files = sorted(
+#     glob.glob("checkpoints/dqn_ep*.pt"), 
+#     key=lambda x: int(x.split("_ep")[1].split(".")[0])
+# )
 
-        action = agent.get_action(state, epsilon=epsilon)
+# if checkpoint_files:
+#     latest_checkpoint = checkpoint_files[-1] 
+#     agent.load(latest_checkpoint)
+#     epsilon = agent.epsilon
+#     step_count = agent.total_steps
+#     start_episode = agent.episode + 1 
+#     print(f"Recovered from latest checkpoint: {latest_checkpoint}")
+# else:
+#     print("No checkpoint found, training from scratch.")
 
 
-        next_state, reward, done, _ = env.step(action)
+# best_reward = -float("inf")
+
+# for episode in range(start_episode, num_episodes):
+#     state = env.reset() 
+#     done = False
+#     total_reward = 0
+
+#     while not done:
+
+#         action = agent.get_action(state, epsilon=epsilon)
+
+
+#         next_state, reward, done, _ = env.step(action)
 
 
 
-        agent.add_transition(state, action, reward, next_state, done)
+#         agent.add_transition(state, action, reward, next_state, done)
 
 
   
-        agent.train()
+#         agent.train()
 
       
-        state = next_state
-        total_reward += reward
-        step_count += 1
-        agent.total_steps = step_count
-    #epsilon = max(epsilon_start * 10 ** (-step_count / 600000), epsilon_end)
-    epsilon = max(epsilon * 0.99924, epsilon_end)
-    agent.epsilon = epsilon
-    agent.episode = episode
-    print(f"Episode {episode}, Reward: {total_reward:.2f}, Epsilon: {epsilon:.3f}, step_count: {step_count}, replay buffer length:{len(agent.replay_buffer)}")
-    reward_history.append(total_reward)
-    if episode % 100== 0:
+#         state = next_state
+#         total_reward += reward
+#         step_count += 1
+#         agent.total_steps = step_count
+#     #epsilon = max(epsilon_start * 10 ** (-step_count / 600000), epsilon_end)
+#     epsilon = max(epsilon * 0.99924, epsilon_end)
+#     agent.epsilon = epsilon
+#     agent.episode = episode
+#     print(f"Episode {episode}, Reward: {total_reward:.2f}, Epsilon: {epsilon:.3f}, step_count: {step_count}, replay buffer length:{len(agent.replay_buffer)}")
+#     reward_history.append(total_reward)
+#     if episode % 100== 0:
 
-        best_reward = agent.maybe_save_best(total_reward, best_reward)
-        agent.save(f"checkpoints/dqn_ep{episode}.pt")
+#         best_reward = agent.maybe_save_best(total_reward, best_reward)
+#         agent.save(f"checkpoints/dqn_ep{episode}.pt")
 
 
 
