@@ -28,6 +28,11 @@ jobs:
         pip install gym
         pip install -r requirements.txt
 
+
+        
+    - name: 2.5 Download checkpoint file from Google Drive
+      run: bash download_checkpoint.sh
+
     - name: 3. Ensure env.so is executable
       run: chmod +x eval.cpython-38-x86_64-linux-gnu.so
 
