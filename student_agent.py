@@ -400,6 +400,7 @@ class DQNVariant:
             self.icm_optimizer.load_state_dict(checkpoint['icm_optimizer'])
 
         print(f"Model loaded from {path}")
+        return self
 
 
 
