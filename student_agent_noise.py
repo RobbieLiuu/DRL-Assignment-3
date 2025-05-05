@@ -408,7 +408,7 @@ import numpy as np
 
 
 # Do not modify the input of the 'act' function and the '__init__' function. 
-class Agent(object):
+class Agentt(object):
     """Agent that acts randomly."""
     def __init__(self):
         self.action_space = gym.spaces.Discrete(12)
